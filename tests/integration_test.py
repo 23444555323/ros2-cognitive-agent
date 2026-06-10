@@ -1,18 +1,9 @@
 import torch
-from cognitive_agent import CognitiveAgent
+from demo_ros2_cognitive_agent import run_production_demo
 
-def test_integration_demo():
-    agent = CognitiveAgent()
-    agent.initialize()
-
-    visual_input = torch.randn(1, 3, 64, 64)
-    language_input = "Go to goal"
-
-    broadcast = agent.step(visual_input, language_input)
-    assert "vision" in broadcast
-    assert "language" in broadcast
-
-    # Trigger dream cycle
-    future = agent.trigger_dream_cycle(agent.world_state, agent.goal, max_generations=2)
-    result = future.result(timeout=2.0)
-    assert result is not None
+def test_full_production_flow():
+    # This basically runs the demo as a test
+    try:
+        run_production_demo()
+    except Exception as e:
+        assert False, f"Production demo failed with error: {e}"

@@ -4,6 +4,10 @@ numpy>=1.21.0
 tqdm>=4.62.0
 pydantic>=1.9.0
 pytest
+chromadb
+sentence-transformers
+pybullet
+pytest-mock
 # For production deployment:
 # cognitive-aug>=0.2.6
 # rclpy>=0.12.0  # ROS 2 Python client

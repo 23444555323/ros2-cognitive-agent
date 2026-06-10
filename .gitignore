@@ -32,3 +32,12 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+
+# Cognitive Agent Runtime Artifacts
+chroma_db/
+habit_cache/
+test_chroma/
+test_habits/
+*.sqlite3
+*.bin
+*.pkl

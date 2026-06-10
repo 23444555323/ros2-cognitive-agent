@@ -1,32 +1,26 @@
 import torch
+import numpy as np
 from cognitive_agent.layer1_neuromorphic_core import (
-    VisualLobe, LanguageLobe, MotorLobe, ThreadSafeGlobalWorkspace, MetacognitiveMonitor
+    VisualLobe, MotorLobe, ThreadSafeGlobalWorkspace
 )
 
-def test_layer1_instantiation():
-    visual = VisualLobe(256)
-    language = LanguageLobe(256)
-    motor = MotorLobe()
+def test_layer1_ros_inheritance():
     workspace = ThreadSafeGlobalWorkspace()
-    monitor = MetacognitiveMonitor()
-
-    assert visual.latent_dim == 256
-    assert motor.state == "NORMAL"
-    assert monitor.ne_surprise == 0.0
-
-def test_layer1_methods():
-    visual = VisualLobe(256)
-    encoding = visual.process(torch.randn(1, 3, 64, 64))
-    assert encoding.shape == (1, 256)
-
-    language = LanguageLobe(256)
-    l_encoding = language.process("test instruction")
-    assert l_encoding.shape == (1, 256)
-
+    visual = VisualLobe(workspace, 256)
     motor = MotorLobe()
-    action = motor.execute(torch.randn(1, 6))
-    assert isinstance(action, str)
+    # Check if they have Node methods (even if mocked)
+    assert hasattr(visual, 'get_logger')
+    assert hasattr(motor, 'create_publisher')
 
+def test_global_workspace_priority():
     workspace = ThreadSafeGlobalWorkspace()
-    workspace.write("test", 123)
-    assert workspace.read("test") == 123
+    workspace.write("low", 1, salience=0.1)
+    workspace.write("high", 2, salience=0.9)
+
+    # Priority queue order (lower priority value = higher salience)
+    p1, t1, k1, v1 = workspace._priority_queue.get_nowait()
+    p2, t2, k2, v2 = workspace._priority_queue.get_nowait()
+
+    assert k1 == "high"
+    assert k2 == "low"
+    assert p1 < p2

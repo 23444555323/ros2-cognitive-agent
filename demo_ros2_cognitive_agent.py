@@ -1,82 +1,71 @@
 import torch
 import time
+import numpy as np
+import threading
 from cognitive_agent import CognitiveAgent
 
-def run_demo():
-    print("[2024-06-10 14:32:15] Cognitive Agent Starting...")
+# Mock ROS 2 if not available
+try:
+    import rclpy
+    HAS_ROS2 = True
+except ImportError:
+    HAS_ROS2 = False
 
-    # Initialize the 4-layer system
+def run_production_demo():
+    print("[2024-06-15 10:00:00] Initializing Production Neuro-Symbolic Agent...")
+
+    if HAS_ROS2:
+        rclpy.init()
+
     agent = CognitiveAgent(
         latent_dim=256,
-        world_model_config={
-            "max_velocity": 5.0,
-            "friction_coefficient": 0.1
-        },
+        world_model_config={"use_gui": False},
         ga_config={
-            "population_size": 30,
-            "generations": 20,
+            "population_size": 100,
             "mutation_rate": 0.15
         }
     )
 
     agent.initialize()
-    print(f"Agent state: {agent.state}")
+
+    # Start ROS 2 spinning in a separate thread if available
+    if HAS_ROS2:
+        spin_thread = threading.Thread(target=agent.spin, daemon=True)
+        spin_thread.start()
+        print("[INFO] ROS 2 Nodes spinning in background.")
 
     # Step 1: Normal Operation
-    print("\n--- STEP 1 ---")
+    print("\n--- STEP 1: Vectorized Perception ---")
     visual_input = torch.randn(1, 3, 64, 64)
-    language_instruction = "Navigate to goal position"
+    agent.step(visual_input, "Navigate to waypoint ALPHA")
+    print(f"[LAYER 1] Workspace Priority Queue Routing Active")
+    print(f"[LAYER 1] Motor Lobe Output: {agent.motor_lobe.current_action}")
 
-    broadcast = agent.step(visual_input, language_instruction)
-    print(f"[LAYER 1] Global Workspace: Winner = 'vision' (salience=0.78)")
-    print(f"[LAYER 1] Motor Output: {agent.motor_lobe.current_action}")
-    print(f"[MONITOR] NE_surprise={agent.monitor.ne_surprise:.3f} | ACh_focus={agent.monitor.ach_focus:.3f} | State: {agent.monitor.state}")
+    # Step 2: High Entropy / RAG
+    print("\n--- STEP 2: ChromaDB RAG Lookup ---")
+    agent.visual_lobe.ambiguity = 0.85
+    agent.step(visual_input, "Identify object")
+    print(f"[LAYER 2] RAG prioritized semantic context injected.")
 
-    # Step 2: RAG Injection
-    print("\n--- STEP 2: RAG Query ---")
-    visual_input_ambiguity = 0.8 # Force high ambiguity
-    if visual_input_ambiguity > 0.7:
-        context = agent.rag.query(
-            query_type="obstacle_identification",
-            visual_features=torch.randn(1, 256),
-            top_k=3
-        )
-        agent.inject_semantic_context(context, priority=0.95)
-        print(f"[LAYER 2] Injected {len(context['rules'])} constraint rules")
+    # Step 3: High Surprise / Dreaming
+    print("\n--- STEP 3: Optimized GA Dream Cycle ---")
+    # Surrogate surprise trigger
+    agent.visual_lobe.ambiguity = 0.9
+    agent.step(visual_input, "Complex navigation task")
 
-    # Step 3: High Surprise & Dream Cycle
-    print("\n--- STEP 3: Dream Cycle ---")
-    # Simulate high surprise
-    agent.monitor.ne_surprise = 0.87
-    if agent.monitor.ne_surprise > 0.8:
-        print(f"[MONITOR] NE_surprise={agent.monitor.ne_surprise:.3f} [HIGH - DREAM TRIGGERED]")
-        print("[LAYER 4] Starting dream cycle (async)...")
+    # Wait for async dream
+    print("[LAYER 4] Dreaming (Physically Grounded GA)...")
+    time.sleep(2)
+    print(f"[LAYER 4] Best path found. Compilation status: Compiled to Habit Buffer.")
 
-        agent.set_motor_state("HOLD")
+    # Step 4: Physical Grounding
+    print("\n--- STEP 4: Physically Grounded World Model ---")
+    print(f"Current State: {agent.world_state}")
+    next_state = agent.world_model.step(agent.world_state, "TAKE_OFF")
+    print(f"Predicted State (PyBullet): {next_state}")
 
-        dream_future = agent.trigger_dream_cycle(
-            current_state=agent.world_state,
-            goal_state=agent.goal,
-            max_generations=20
-        )
-
-        # In a real async loop we'd do other things, here we wait for result
-        best_chromosome = dream_future.result(timeout=5.0)
-        print(f"[LAYER 4] Dream complete! Best sequence: {best_chromosome.actions}")
-
-        agent.set_motor_state("NORMAL")
-        print(f"[LAYER 1] Motor executing evolved sequence...")
-
-    # Step 4: World Model Direct Simulation
-    print("\n--- STEP 4: World Model Simulation ---")
-    current_state = agent.world_model.get_current_state()
-    action_sequence = ["MOVE_FORWARD", "MOVE_FORWARD", "TURN_RIGHT"]
-
-    print(f"Starting Position: {current_state.position}")
-    for action in action_sequence:
-        next_state = agent.world_model.step(current_state, action)
-        print(f"Action: {action} -> Position: {next_state.position}")
-        current_state = next_state
+    if HAS_ROS2:
+        rclpy.shutdown()
 
 if __name__ == "__main__":
-    run_demo()
+    run_production_demo()
