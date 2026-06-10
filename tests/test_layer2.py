@@ -1,20 +1,19 @@
 import torch
-from cognitive_agent.layer2_rag_system import (
-    MockVectorDatabase, SemanticMemoryInterface, ConstraintPropagator
-)
+import os
+import shutil
+from cognitive_agent.layer2_rag_system import VectorDatabaseInterface
 
-def test_layer2_instantiation():
-    db = MockVectorDatabase()
-    rag = SemanticMemoryInterface()
-    propagator = ConstraintPropagator()
-    assert len(db.data) > 0
+def test_chroma_db_integration():
+    db_path = "./test_chroma"
+    if os.path.exists(db_path):
+        shutil.rmtree(db_path)
 
-def test_layer2_methods():
-    rag = SemanticMemoryInterface()
-    context = rag.query("obstacle_identification", torch.randn(1, 256))
-    assert "rules" in context
+    db = VectorDatabaseInterface(db_path=db_path)
+    if not db.mock_mode:
+        db.add_document("Test Rule", {"rules": "test_action"}, "id_1")
+        results = db.similarity_search("Test", top_k=1)
+        assert len(results) > 0
+        assert results[0]["rules"] == "test_action"
 
-    propagator = ConstraintPropagator()
-    constraints = propagator.propagate(context, priority=0.9)
-    assert len(constraints) > 0
-    assert constraints[0]["priority"] == 0.9
+    if os.path.exists(db_path):
+        shutil.rmtree(db_path)

@@ -1,71 +1,79 @@
 from typing import Dict, List, Any, Optional, Tuple
 import numpy as np
+from .utils import log_info, log_error
+
+try:
+    import pybullet as p
+    import pybullet_data
+    HAS_PYBULLET = True
+except ImportError:
+    HAS_PYBULLET = False
 
 class DroneState:
     """Realistic drone state variables."""
     def __init__(self, position: Tuple[float, float, float] = (0.0, 0.0, 0.0)):
         self.position = np.array(position)
         self.velocity = np.zeros(3)
-        self.acceleration = np.zeros(3)
+        self.orientation = np.zeros(4) # Quaternion [x,y,z,w]
 
     def __repr__(self):
         return f"DroneState(pos={self.position}, vel={self.velocity})"
 
-class PhysicsBridgeHook:
-    """Bridge for external physics engines like PyBullet or MuJoCo."""
-    def __init__(self):
-        self.connected = False
+class PyBulletSimulator:
+    """Robust Physics-Engine simulation using PyBullet."""
+    def __init__(self, use_gui: bool = False):
+        if not HAS_PYBULLET:
+            self.mock_mode = True
+            return
 
-    def connect(self):
-        self.connected = True
-        return self
+        self.mock_mode = False
+        mode = p.GUI if use_gui else p.DIRECT
+        self.physics_client = p.connect(mode)
+        p.setAdditionalSearchPath(pybullet_data.getDataPath())
+        p.setGravity(0, 0, -9.81)
 
-    def step(self, action: str) -> DroneState:
-        # Placeholder for external engine step
-        return DroneState()
+        # Load drone and environment
+        self.plane_id = p.loadURDF("plane.urdf")
+        # Load a basic box as a drone placeholder
+        self.drone_id = p.loadURDF("sphere_1cm.urdf", [0, 0, 0.5])
 
-class PhysicsSimulator:
-    """Lightweight physics calculations for transition function."""
-    def __init__(self, max_velocity: float = 5.0, friction: float = 0.1):
-        self.max_velocity = max_velocity
-        self.friction = friction
+        self.dt = 1./240.
 
-    def compute_next_state(self, current_state: DroneState, action: str) -> DroneState:
-        next_state = DroneState(tuple(current_state.position))
-        next_state.velocity = current_state.velocity.copy()
+    def step(self, current_state: DroneState, action: str) -> DroneState:
+        if self.mock_mode:
+            # Fallback to basic kinematics
+            next_pos = current_state.position + current_state.velocity
+            return DroneState(tuple(next_pos))
 
-        # Simple action to physics mapping
-        force = np.zeros(3)
-        if action == "MOVE_FORWARD": force[0] = 1.0
-        elif action == "MOVE_BACKWARD": force[0] = -1.0
-        elif action == "TURN_LEFT": force[1] = -1.0
-        elif action == "TURN_RIGHT": force[1] = 1.0
-        elif action == "TAKE_OFF": force[2] = 1.0
-        elif action == "LAND": force[2] = -1.0
+        # Reset drone to current state
+        p.resetBasePositionAndOrientation(self.drone_id, current_state.position, [0,0,0,1])
 
-        # Apply physics
-        next_state.acceleration = force - (self.friction * current_state.velocity)
-        next_state.velocity += next_state.acceleration
+        # Apply forces based on action
+        force = [0, 0, 0]
+        if action == "MOVE_FORWARD": force = [10, 0, 0]
+        elif action == "MOVE_BACKWARD": force = [-10, 0, 0]
+        elif action == "TAKE_OFF": force = [0, 0, 20]
 
-        # Limit velocity
-        speed = np.linalg.norm(next_state.velocity)
-        if speed > self.max_velocity:
-            next_state.velocity = (next_state.velocity / speed) * self.max_velocity
+        p.applyExternalForce(self.drone_id, -1, force, [0,0,0], p.WORLD_FRAME)
+        p.stepSimulation()
 
-        next_state.position += next_state.velocity
-        return next_state
+        # Extract next state
+        pos, ori = p.getBasePositionAndOrientation(self.drone_id)
+        vel, ang_vel = p.getBaseVelocity(self.drone_id)
+
+        new_state = DroneState(pos)
+        new_state.velocity = np.array(vel)
+        new_state.orientation = np.array(ori)
+        return new_state
 
 class WorldModel:
-    """f(state, action) -> next_state simulator."""
-    def __init__(self, config: Dict[str, Any]):
-        self.simulator = PhysicsSimulator(
-            max_velocity=config.get("max_velocity", 5.0),
-            friction=config.get("friction_coefficient", 0.1)
-        )
+    """f(state, action) -> next_state simulator with PyBullet integration."""
+    def __init__(self, config: Dict[str, Any] = {}):
+        self.simulator = PyBulletSimulator(use_gui=config.get("use_gui", False))
         self.current_state = DroneState()
 
     def get_current_state(self) -> DroneState:
         return self.current_state
 
     def step(self, state: DroneState, action: str) -> DroneState:
-        return self.simulator.compute_next_state(state, action)
+        return self.simulator.step(state, action)
