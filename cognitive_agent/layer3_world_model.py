@@ -20,44 +20,61 @@ class DroneState:
         return f"DroneState(pos={self.position}, vel={self.velocity})"
 
 class PyBulletSimulator:
-    """Robust Physics-Engine simulation using PyBullet."""
+    """Robust Physics-Engine simulation using PyBullet with persistent sessions."""
     def __init__(self, use_gui: bool = False):
         if not HAS_PYBULLET:
             self.mock_mode = True
+            log_error("PyBullet not installed. Using Mock Simulator.")
             return
 
         self.mock_mode = False
         mode = p.GUI if use_gui else p.DIRECT
-        self.physics_client = p.connect(mode)
-        p.setAdditionalSearchPath(pybullet_data.getDataPath())
-        p.setGravity(0, 0, -9.81)
+        try:
+            self.physics_client = p.connect(mode)
+            p.setAdditionalSearchPath(pybullet_data.getDataPath())
+            p.setGravity(0, 0, -9.81)
 
-        # Load drone and environment
-        self.plane_id = p.loadURDF("plane.urdf")
-        # Load a basic box as a drone placeholder
-        self.drone_id = p.loadURDF("sphere_1cm.urdf", [0, 0, 0.5])
+            # Load static environment
+            self.plane_id = p.loadURDF("plane.urdf")
+            # Load drone placeholder with real mass and inertia
+            # In production: load specific drone URDF with joint constraints
+            self.drone_id = p.loadURDF("sphere_1cm.urdf", [0, 0, 0.5], useFixedBase=False)
+            p.changeDynamics(self.drone_id, -1, mass=1.0)
 
-        self.dt = 1./240.
+            self.dt = 1./240.
+        except Exception as e:
+            log_error(f"PyBullet initialization failed: {e}")
+            self.mock_mode = True
 
     def step(self, current_state: DroneState, action: str) -> DroneState:
+        """Runs a localized step in the physics engine instance."""
         if self.mock_mode:
-            # Fallback to basic kinematics
-            next_pos = current_state.position + current_state.velocity
+            # Fallback to kinematics
+            next_pos = current_state.position + current_state.velocity * 0.1
             return DroneState(tuple(next_pos))
 
-        # Reset drone to current state
-        p.resetBasePositionAndOrientation(self.drone_id, current_state.position, [0,0,0,1])
+        # Synchronize engine with agent's perceived state
+        p.resetBasePositionAndOrientation(
+            self.drone_id,
+            current_state.position,
+            current_state.orientation if np.any(current_state.orientation) else [0,0,0,1]
+        )
+        p.resetBaseVelocity(self.drone_id, current_state.velocity)
 
-        # Apply forces based on action
+        # Apply physics-grounded forces
+        # Linear forces (N) and Torques
         force = [0, 0, 0]
         if action == "MOVE_FORWARD": force = [10, 0, 0]
         elif action == "MOVE_BACKWARD": force = [-10, 0, 0]
-        elif action == "TAKE_OFF": force = [0, 0, 20]
+        elif action == "TAKE_OFF": force = [0, 0, 15] # Oppose gravity (9.81)
 
+        # Apply external force to the center of mass
         p.applyExternalForce(self.drone_id, -1, force, [0,0,0], p.WORLD_FRAME)
+
+        # Simulation step
         p.stepSimulation()
 
-        # Extract next state
+        # Extract precise next-state matrices
         pos, ori = p.getBasePositionAndOrientation(self.drone_id)
         vel, ang_vel = p.getBaseVelocity(self.drone_id)
 
@@ -65,6 +82,13 @@ class PyBulletSimulator:
         new_state.velocity = np.array(vel)
         new_state.orientation = np.array(ori)
         return new_state
+
+    def __del__(self):
+        if not self.mock_mode:
+            try:
+                p.disconnect(self.physics_client)
+            except Exception:
+                pass
 
 class WorldModel:
     """f(state, action) -> next_state simulator with PyBullet integration."""
@@ -76,4 +100,5 @@ class WorldModel:
         return self.current_state
 
     def step(self, state: DroneState, action: str) -> DroneState:
+        """Test 'dreams' against complex real-world gravity and constraints."""
         return self.simulator.step(state, action)

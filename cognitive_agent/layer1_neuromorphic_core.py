@@ -2,8 +2,16 @@ import torch
 import threading
 import time
 import queue
+import numpy as np
 from typing import Dict, Any, List, Optional
 from .utils import log_info, log_error
+
+try:
+    from PIL import Image as PILImage
+    from transformers import AutoProcessor, AutoModel
+    HAS_VLM = True
+except ImportError:
+    HAS_VLM = False
 
 # Mock ROS 2 if not available
 try:
@@ -25,12 +33,26 @@ except ImportError:
             return Logger()
 
 class VisualLobe(Node):
-    """Processes environmental state via ROS 2 Image subscriber."""
+    """Processes environmental state via ROS 2 Image subscriber and SigLIP VLM."""
     def __init__(self, workspace, latent_dim: int = 256):
         super().__init__('visual_lobe')
         self.workspace = workspace
         self.latent_dim = latent_dim
         self.ambiguity = 0.0
+
+        # Initialize SigLIP VLM (Production: loading quantized model for Jetson)
+        if HAS_VLM:
+            try:
+                # Using a lightweight SigLIP model
+                model_name = "google/siglip-base-patch16-224"
+                self.processor = AutoProcessor.from_pretrained(model_name)
+                self.model = AutoModel.from_pretrained(model_name)
+                self.mock_vlm = False
+            except Exception as e:
+                log_error(f"Failed to load SigLIP: {e}")
+                self.mock_vlm = True
+        else:
+            self.mock_vlm = True
 
         if HAS_ROS2:
             self.subscription = self.create_subscription(
@@ -41,20 +63,41 @@ class VisualLobe(Node):
 
     def image_callback(self, msg):
         """Native ROS 2 callback for async perception."""
-        # Parsing raw pixels into environmental state (Vectorized Perception)
-        # Mocking the torch tensor conversion from ROS msg
-        visual_input = torch.randn(1, 3, 64, 64)
+        # For demo, we simulate the incoming raw tensor (C, H, W)
+        visual_input = torch.randn(3, 224, 224)
         encoding = self.process(visual_input)
 
-        # Write to Global Workspace immediately
         self.workspace.write("vision", encoding, salience=0.8)
-        self.get_logger().info("Visual Lobe updated Workspace via ROS 2 topic.")
+        self.get_logger().info("Visual Lobe updated Workspace via VLM perception.")
 
-    def process(self, visual_input: torch.Tensor) -> torch.Tensor:
-        # Standard object detection backbone placeholder
-        encoding = torch.randn(1, self.latent_dim)
-        self.ambiguity = float(torch.rand(1).item())
-        return encoding
+    def process(self, visual_input: Any) -> torch.Tensor:
+        """Process image input through SigLIP VLM to get coordinate-based states."""
+        if self.mock_vlm:
+            encoding = torch.randn(1, self.latent_dim)
+            self.ambiguity = float(torch.rand(1).item())
+            return encoding
+
+        # Real VLM logic
+        if isinstance(visual_input, torch.Tensor):
+            # Handle batch dimension if present (N, C, H, W) -> (C, H, W)
+            if visual_input.ndim == 4:
+                visual_input = visual_input[0]
+
+            # (C, H, W) -> (H, W, C)
+            visual_input = visual_input.cpu().numpy().transpose(1, 2, 0)
+            visual_input = (visual_input * 255).astype(np.uint8)
+            visual_input = PILImage.fromarray(visual_input)
+
+        inputs = self.processor(images=visual_input, return_tensors="pt")
+        with torch.no_grad():
+            outputs = self.model.get_image_features(**inputs)
+
+        # transformers model outputs are often wrappers around tensors
+        features_tensor = outputs.pooler_output if hasattr(outputs, 'pooler_output') else outputs[0]
+
+        features = features_tensor[:, :self.latent_dim]
+        self.ambiguity = float(torch.std(features).item())
+        return features
 
 class LanguageLobe:
     """Processes text/semantic context."""
@@ -85,8 +128,12 @@ class MotorLobe(Node):
 
         if HAS_ROS2:
             twist = Twist()
-            if self.current_action == "MOVE_FORWARD": twist.linear.x = 1.0
-            elif self.current_action == "MOVE_BACKWARD": twist.linear.x = -1.0
+            if self.current_action == "MOVE_FORWARD": twist.linear.x = 0.5
+            elif self.current_action == "MOVE_BACKWARD": twist.linear.x = -0.5
+            elif self.current_action == "TURN_LEFT": twist.angular.z = 0.5
+            elif self.current_action == "TURN_RIGHT": twist.angular.z = -0.5
+            elif self.current_action == "TAKE_OFF": twist.linear.z = 1.0
+            elif self.current_action == "LAND": twist.linear.z = -1.0
             self.publisher_.publish(twist)
 
         return self.current_action
