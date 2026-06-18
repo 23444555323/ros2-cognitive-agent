@@ -41,14 +41,17 @@ class HabitBuffer:
         if not os.path.exists(cache_dir):
             os.makedirs(cache_dir)
         self.habits: Dict[str, List[str]] = {}
+        self._io_lock = threading.Lock()
         self._load_habits()
 
     def _load_habits(self):
         path = os.path.join(self.cache_dir, "habits.json")
         if os.path.exists(path):
             try:
-                with open(path, "r") as f:
-                    self.habits = json.load(f)
+                # Wrap file read under lock to prevent dirty reads during a write
+                with self._io_lock:
+                    with open(path, "r") as f:
+                        self.habits = json.load(f)
             except Exception:
                 self.habits = {}
 
@@ -68,14 +71,16 @@ class HabitBuffer:
 
     def get_habit(self, state: DroneState) -> Optional[List[str]]:
         state_hash = self._hash_state(state)
-        return self.habits.get(state_hash)
+        with self._io_lock:
+            return self.habits.get(state_hash)
 
     def compile_habit(self, state: DroneState, actions: List[str]):
         state_hash = self._hash_state(state)
-        self.habits[state_hash] = actions
-        # Serialize to disk securely via JSON
-        with open(os.path.join(self.cache_dir, "habits.json"), "w") as f:
-            json.dump(self.habits, f)
+        with self._io_lock:
+            self.habits[state_hash] = actions
+            # Serialize to disk securely via JSON
+            with open(os.path.join(self.cache_dir, "habits.json"), "w") as f:
+                json.dump(self.habits, f)
 
 class GeneticAlgorithm:
     """Vectorized Evolution loop for high performance."""
@@ -89,19 +94,24 @@ class GeneticAlgorithm:
     def _predict_vectorized(self, current_pos: np.ndarray, current_vel: np.ndarray, actions_batch: np.ndarray) -> tuple:
         """Analytical kinematics model for vectorized GA evaluation."""
         forces = np.zeros((len(actions_batch), 3))
-        # Mapping indices to forces as defined in PyBulletSimulator
-        forces[actions_batch == 0] = [10, 0, 0]  # MOVE_FORWARD
-        forces[actions_batch == 1] = [-10, 0, 0] # MOVE_BACKWARD
-        forces[actions_batch == 4] = [0, 0, 15]  # TAKE_OFF
+
+        # Comprehensive discrete action-to-force translation mapping
+        forces[actions_batch == 0] = [10.0, 0.0, 0.0]   # MOVE_FORWARD (N)
+        forces[actions_batch == 1] = [-10.0, 0.0, 0.0]  # MOVE_BACKWARD (N)
+        forces[actions_batch == 2] = [0.0, -5.0, 0.0]   # TURN_LEFT (simulated lateral thrust)
+        forces[actions_batch == 3] = [0.0, 5.0, 0.0]    # TURN_RIGHT (simulated lateral thrust)
+        forces[actions_batch == 4] = [0.0, 0.0, 15.0]   # TAKE_OFF (N)
+        forces[actions_batch == 5] = [0.0, 0.0, -5.0]   # LAND (descending vertical thrust)
 
         gravity = np.array([0, 0, -9.81])
         dt = 1.0 / 240.0 # Standard PyBullet timestep
 
-        acc = (forces + gravity) # mass is 1.0
+        # Accelerations assuming a dry drone mass of 1.0 kg
+        acc = (forces + gravity)
         next_vel = current_vel + acc * dt
         next_pos = current_pos + next_vel * dt
 
-        # Simple ground constraint
+        # Realistic hard ground constraint (z-floor cannot pass zero)
         next_pos[:, 2] = np.maximum(next_pos[:, 2], 0.0)
 
         return next_pos, next_vel
