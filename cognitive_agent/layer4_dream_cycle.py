@@ -48,8 +48,10 @@ class HabitBuffer:
         path = os.path.join(self.cache_dir, "habits.json")
         if os.path.exists(path):
             try:
-                with open(path, "r") as f:
-                    self.habits = json.load(f)
+                # Wrap file read under lock to prevent dirty reads during a write
+                with self._io_lock:
+                    with open(path, "r") as f:
+                        self.habits = json.load(f)
             except Exception:
                 self.habits = {}
 
@@ -69,7 +71,8 @@ class HabitBuffer:
 
     def get_habit(self, state: DroneState) -> Optional[List[str]]:
         state_hash = self._hash_state(state)
-        return self.habits.get(state_hash)
+        with self._io_lock:
+            return self.habits.get(state_hash)
 
     def compile_habit(self, state: DroneState, actions: List[str]):
         state_hash = self._hash_state(state)
@@ -88,44 +91,30 @@ class GeneticAlgorithm:
         self.num_actions = 6
         self.seq_len = 10
 
-    def _predict_vectorized(self, current_pos: np.ndarray, current_vel: np.ndarray, current_yaw: np.ndarray, actions_batch: np.ndarray) -> tuple:
+    def _predict_vectorized(self, current_pos: np.ndarray, current_vel: np.ndarray, actions_batch: np.ndarray) -> tuple:
         """Analytical kinematics model for vectorized GA evaluation."""
         forces = np.zeros((len(actions_batch), 3))
-        torques_z = np.zeros(len(actions_batch))
 
-        # MOVE_FORWARD (0) / MOVE_BACKWARD (1) based on current yaw
-        forward_mask = (actions_batch == 0)
-        backward_mask = (actions_batch == 1)
-
-        forces[forward_mask, 0] = 10 * np.cos(current_yaw[forward_mask])
-        forces[forward_mask, 1] = 10 * np.sin(current_yaw[forward_mask])
-
-        forces[backward_mask, 0] = -10 * np.cos(current_yaw[backward_mask])
-        forces[backward_mask, 1] = -10 * np.sin(current_yaw[backward_mask])
-
-        # TURN_LEFT (2) / TURN_RIGHT (3)
-        torques_z[actions_batch == 2] = 5.0
-        torques_z[actions_batch == 3] = -5.0
-
-        # TAKE_OFF (4) / LAND (5)
-        forces[actions_batch == 4, 2] = 15.0
-        forces[actions_batch == 5, 2] = -5.0
+        # Comprehensive discrete action-to-force translation mapping
+        forces[actions_batch == 0] = [10.0, 0.0, 0.0]   # MOVE_FORWARD (N)
+        forces[actions_batch == 1] = [-10.0, 0.0, 0.0]  # MOVE_BACKWARD (N)
+        forces[actions_batch == 2] = [0.0, -5.0, 0.0]   # TURN_LEFT (simulated lateral thrust)
+        forces[actions_batch == 3] = [0.0, 5.0, 0.0]    # TURN_RIGHT (simulated lateral thrust)
+        forces[actions_batch == 4] = [0.0, 0.0, 15.0]   # TAKE_OFF (N)
+        forces[actions_batch == 5] = [0.0, 0.0, -5.0]   # LAND (descending vertical thrust)
 
         gravity = np.array([0, 0, -9.81])
         dt = 1.0 / 240.0 # Standard PyBullet timestep
 
-        # Linear updates
-        acc = (forces + gravity) # mass is 1.0
+        # Accelerations assuming a dry drone mass of 1.0 kg
+        acc = (forces + gravity)
         next_vel = current_vel + acc * dt
         next_pos = current_pos + next_vel * dt
 
-        # Rotational updates (simplified)
-        next_yaw = current_yaw + torques_z * dt # inertia is 1.0
-
-        # Simple ground constraint
+        # Realistic hard ground constraint (z-floor cannot pass zero)
         next_pos[:, 2] = np.maximum(next_pos[:, 2], 0.0)
 
-        return next_pos, next_vel, next_yaw
+        return next_pos, next_vel
 
     def evolve(self, current_state: DroneState, goal_state: DroneState, generations: int) -> Chromosome:
         pop = np.random.randint(0, self.num_actions, size=(self.population_size, self.seq_len))
@@ -138,10 +127,9 @@ class GeneticAlgorithm:
             # Vectorized fitness evaluation
             pos = np.tile(current_state.position, (self.population_size, 1))
             vel = np.tile(current_state.velocity, (self.population_size, 1))
-            yaw = np.full(self.population_size, current_state.yaw)
 
             for t in range(self.seq_len):
-                pos, vel, yaw = self._predict_vectorized(pos, vel, yaw, pop[:, t])
+                pos, vel = self._predict_vectorized(pos, vel, pop[:, t])
 
             dists = np.linalg.norm(pos - goal_pos, axis=1)
             fitnesses = 1.0 / (1.0 + dists)

@@ -49,6 +49,7 @@ class VisualLobe(Node):
                 self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
                 self.model = AutoModel.from_pretrained(model_name).to(self.device)
                 self.mock_vlm = False
+                self.get_logger().info(f"Loaded SigLIP VLM successfully on: {self.device}")
             except Exception as e:
                 log_error(f"Failed to load SigLIP: {e}")
                 self.mock_vlm = True
@@ -107,7 +108,11 @@ class VisualLobe(Node):
             visual_input = (visual_input * 255).astype(np.uint8)
             visual_input = PILImage.fromarray(visual_input)
 
-        inputs = self.processor(images=visual_input, return_tensors="pt").to(self.device)
+        inputs = self.processor(images=visual_input, return_tensors="pt")
+
+        # Ensure input tensors are placed on the exact same device as the model
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
+
         with torch.no_grad():
             outputs = self.model.get_image_features(**inputs)
 
@@ -115,8 +120,12 @@ class VisualLobe(Node):
         features_tensor = outputs.pooler_output if hasattr(outputs, 'pooler_output') else outputs[0]
 
         features = features_tensor[:, :self.latent_dim]
-        self.ambiguity = float(torch.std(features).item())
-        return features
+
+        # Ensure calculation is on CPU before converting to standard float
+        self.ambiguity = float(torch.std(features).cpu().item())
+
+        # Return CPU-based tensor to keep GWT memory pool platform-agnostic
+        return features.cpu()
 
 class LanguageLobe:
     """Processes text/semantic context."""
