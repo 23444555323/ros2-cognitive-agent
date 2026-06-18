@@ -32,7 +32,6 @@ class VectorDatabaseInterface:
 
         self.mock_mode = False
         self.client = chromadb.PersistentClient(path=db_path)
-        self.model = SentenceTransformer('all-MiniLM-L6-v2')
         self.collection = self.client.get_or_create_collection(name="cognitive_memory")
 
     def add_document(self, text: str, metadata: Dict[str, Any], doc_id: str):

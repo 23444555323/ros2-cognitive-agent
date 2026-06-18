@@ -42,7 +42,7 @@ class CognitiveAgent:
         self.world_model = WorldModel(wm_config)
 
         ga_conf = ga_config or {"population_size": 100, "mutation_rate": 0.1}
-        self.dream_cycle = DreamCycle(ga_conf, self.world_model)
+        self.dream_cycle = DreamCycle(ga_conf, WorldModel(wm_config))
 
         self.state = "INITIALIZING"
         self.world_state = DroneState()

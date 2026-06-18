@@ -53,9 +53,18 @@ class HabitBuffer:
                 self.habits = {}
 
     def _hash_state(self, state: DroneState) -> str:
-        # Simple discretization for state matching
+        # Improved discretization for state matching including velocity and orientation
         rounded_pos = np.round(state.position, 1)
-        return str(tuple(rounded_pos))
+        rounded_vel = np.round(state.velocity, 1)
+        # Use only a few digits of orientation to maintain some generalization
+        rounded_ori = np.round(state.orientation, 2)
+
+        state_tuple = (
+            tuple(rounded_pos),
+            tuple(rounded_vel),
+            tuple(rounded_ori)
+        )
+        return str(state_tuple)
 
     def get_habit(self, state: DroneState) -> Optional[List[str]]:
         state_hash = self._hash_state(state)
@@ -77,22 +86,43 @@ class GeneticAlgorithm:
         self.num_actions = 6
         self.seq_len = 10
 
+    def _predict_vectorized(self, current_pos: np.ndarray, current_vel: np.ndarray, actions_batch: np.ndarray) -> tuple:
+        """Analytical kinematics model for vectorized GA evaluation."""
+        forces = np.zeros((len(actions_batch), 3))
+        # Mapping indices to forces as defined in PyBulletSimulator
+        forces[actions_batch == 0] = [10, 0, 0]  # MOVE_FORWARD
+        forces[actions_batch == 1] = [-10, 0, 0] # MOVE_BACKWARD
+        forces[actions_batch == 4] = [0, 0, 15]  # TAKE_OFF
+
+        gravity = np.array([0, 0, -9.81])
+        dt = 1.0 / 240.0 # Standard PyBullet timestep
+
+        acc = (forces + gravity) # mass is 1.0
+        next_vel = current_vel + acc * dt
+        next_pos = current_pos + next_vel * dt
+
+        # Simple ground constraint
+        next_pos[:, 2] = np.maximum(next_pos[:, 2], 0.0)
+
+        return next_pos, next_vel
+
     def evolve(self, current_state: DroneState, goal_state: DroneState, generations: int) -> Chromosome:
         pop = np.random.randint(0, self.num_actions, size=(self.population_size, self.seq_len))
         best_fitness = -1.0
         best_chromo = None
 
-        for _ in range(generations):
-            fitnesses = np.zeros(self.population_size)
-            # Fitness evaluation loop (Physically grounded)
-            for i in range(self.population_size):
-                temp_state = current_state
-                for idx in pop[i]:
-                    action = ["MOVE_FORWARD", "MOVE_BACKWARD", "TURN_LEFT", "TURN_RIGHT", "TAKE_OFF", "LAND"][idx]
-                    temp_state = self.world_model.step(temp_state, action)
+        goal_pos = np.array(goal_state.position)
 
-                dist = np.linalg.norm(temp_state.position - goal_state.position)
-                fitnesses[i] = 1.0 / (1.0 + dist)
+        for _ in range(generations):
+            # Vectorized fitness evaluation
+            pos = np.tile(current_state.position, (self.population_size, 1))
+            vel = np.tile(current_state.velocity, (self.population_size, 1))
+
+            for t in range(self.seq_len):
+                pos, vel = self._predict_vectorized(pos, vel, pop[:, t])
+
+            dists = np.linalg.norm(pos - goal_pos, axis=1)
+            fitnesses = 1.0 / (1.0 + dists)
 
             idx = np.argsort(fitnesses)[::-1]
             pop = pop[idx]
