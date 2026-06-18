@@ -63,8 +63,23 @@ class VisualLobe(Node):
 
     def image_callback(self, msg):
         """Native ROS 2 callback for async perception."""
-        # For demo, we simulate the incoming raw tensor (C, H, W)
-        visual_input = torch.randn(3, 224, 224)
+        try:
+            import cv2
+            # Handle ROS 2 Image message without cv_bridge
+            # msg.data is typically a buffer, msg.height, msg.width, msg.encoding
+            # Assuming 'bgr8' or 'rgb8' for simplicity in this robot context
+            frame = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, -1)
+
+            # SigLIP expects RGB
+            if getattr(msg, 'encoding', 'rgb8') == 'bgr8':
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+            visual_input = frame
+        except Exception as e:
+            self.get_logger().error(f"Failed to decode image: {e}")
+            # Fallback to random for robustness in simulation
+            visual_input = torch.randn(3, 224, 224)
+
         encoding = self.process(visual_input)
 
         self.workspace.write("vision", encoding, salience=0.8)
@@ -78,7 +93,10 @@ class VisualLobe(Node):
             return encoding
 
         # Real VLM logic
-        if isinstance(visual_input, torch.Tensor):
+        if isinstance(visual_input, np.ndarray):
+            # Already (H, W, C) from cv2/numpy
+            visual_input = PILImage.fromarray(visual_input)
+        elif isinstance(visual_input, torch.Tensor):
             # Handle batch dimension if present (N, C, H, W) -> (C, H, W)
             if visual_input.ndim == 4:
                 visual_input = visual_input[0]
@@ -146,16 +164,16 @@ class ThreadSafeGlobalWorkspace:
         self._lock = threading.Lock()
 
     def write(self, key: str, value: Any, salience: float = 0.5):
+        timestamp = time.time()
         try:
             priority = 1.0 - salience
-            timestamp = time.time()
             item = (priority, timestamp, key, value)
             self._priority_queue.put_nowait(item)
-
-            with self._lock:
-                self._memory_pool[key] = {"value": value, "timestamp": timestamp}
         except queue.Full:
             pass
+
+        with self._lock:
+            self._memory_pool[key] = {"value": value, "timestamp": timestamp}
 
     def read(self, key: str) -> Optional[Any]:
         with self._lock:

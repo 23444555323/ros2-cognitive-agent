@@ -31,15 +31,15 @@ class PyBulletSimulator:
         mode = p.GUI if use_gui else p.DIRECT
         try:
             self.physics_client = p.connect(mode)
-            p.setAdditionalSearchPath(pybullet_data.getDataPath())
-            p.setGravity(0, 0, -9.81)
+            p.setAdditionalSearchPath(pybullet_data.getDataPath(), physicsClientId=self.physics_client)
+            p.setGravity(0, 0, -9.81, physicsClientId=self.physics_client)
 
             # Load static environment
-            self.plane_id = p.loadURDF("plane.urdf")
+            self.plane_id = p.loadURDF("plane.urdf", physicsClientId=self.physics_client)
             # Load drone placeholder with real mass and inertia
             # In production: load specific drone URDF with joint constraints
-            self.drone_id = p.loadURDF("sphere_1cm.urdf", [0, 0, 0.5], useFixedBase=False)
-            p.changeDynamics(self.drone_id, -1, mass=1.0)
+            self.drone_id = p.loadURDF("sphere_1cm.urdf", [0, 0, 0.5], useFixedBase=False, physicsClientId=self.physics_client)
+            p.changeDynamics(self.drone_id, -1, mass=1.0, physicsClientId=self.physics_client)
 
             self.dt = 1./240.
         except Exception as e:
@@ -57,9 +57,10 @@ class PyBulletSimulator:
         p.resetBasePositionAndOrientation(
             self.drone_id,
             current_state.position,
-            current_state.orientation if np.any(current_state.orientation) else [0,0,0,1]
+            current_state.orientation if np.any(current_state.orientation) else [0,0,0,1],
+            physicsClientId=self.physics_client
         )
-        p.resetBaseVelocity(self.drone_id, current_state.velocity)
+        p.resetBaseVelocity(self.drone_id, current_state.velocity, physicsClientId=self.physics_client)
 
         # Apply physics-grounded forces
         # Linear forces (N) and Torques
@@ -69,14 +70,14 @@ class PyBulletSimulator:
         elif action == "TAKE_OFF": force = [0, 0, 15] # Oppose gravity (9.81)
 
         # Apply external force to the center of mass
-        p.applyExternalForce(self.drone_id, -1, force, [0,0,0], p.WORLD_FRAME)
+        p.applyExternalForce(self.drone_id, -1, force, [0,0,0], p.WORLD_FRAME, physicsClientId=self.physics_client)
 
         # Simulation step
-        p.stepSimulation()
+        p.stepSimulation(physicsClientId=self.physics_client)
 
         # Extract precise next-state matrices
-        pos, ori = p.getBasePositionAndOrientation(self.drone_id)
-        vel, ang_vel = p.getBaseVelocity(self.drone_id)
+        pos, ori = p.getBasePositionAndOrientation(self.drone_id, physicsClientId=self.physics_client)
+        vel, ang_vel = p.getBaseVelocity(self.drone_id, physicsClientId=self.physics_client)
 
         new_state = DroneState(pos)
         new_state.velocity = np.array(vel)
