@@ -14,10 +14,11 @@ class DroneState:
     def __init__(self, position: Tuple[float, float, float] = (0.0, 0.0, 0.0)):
         self.position = np.array(position)
         self.velocity = np.zeros(3)
-        self.orientation = np.zeros(4) # Quaternion [x,y,z,w]
+        self.orientation = np.array([0, 0, 0, 1]) # Quaternion [x,y,z,w]
+        self.yaw = 0.0
 
     def __repr__(self):
-        return f"DroneState(pos={self.position}, vel={self.velocity})"
+        return f"DroneState(pos={self.position}, vel={self.velocity}, yaw={self.yaw:.2f})"
 
 class PyBulletSimulator:
     """Robust Physics-Engine simulation using PyBullet with persistent sessions."""
@@ -82,6 +83,11 @@ class PyBulletSimulator:
         new_state = DroneState(pos)
         new_state.velocity = np.array(vel)
         new_state.orientation = np.array(ori)
+
+        # Extract yaw from quaternion
+        _, _, yaw = p.getEulerFromQuaternion(ori)
+        new_state.yaw = yaw
+
         return new_state
 
     def __del__(self):

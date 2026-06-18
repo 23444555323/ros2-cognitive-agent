@@ -46,7 +46,8 @@ class VisualLobe(Node):
                 # Using a lightweight SigLIP model
                 model_name = "google/siglip-base-patch16-224"
                 self.processor = AutoProcessor.from_pretrained(model_name)
-                self.model = AutoModel.from_pretrained(model_name)
+                self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+                self.model = AutoModel.from_pretrained(model_name).to(self.device)
                 self.mock_vlm = False
             except Exception as e:
                 log_error(f"Failed to load SigLIP: {e}")
@@ -106,7 +107,7 @@ class VisualLobe(Node):
             visual_input = (visual_input * 255).astype(np.uint8)
             visual_input = PILImage.fromarray(visual_input)
 
-        inputs = self.processor(images=visual_input, return_tensors="pt")
+        inputs = self.processor(images=visual_input, return_tensors="pt").to(self.device)
         with torch.no_grad():
             outputs = self.model.get_image_features(**inputs)
 
