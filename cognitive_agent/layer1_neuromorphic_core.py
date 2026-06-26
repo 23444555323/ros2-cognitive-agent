@@ -195,14 +195,16 @@ class ThreadSafeGlobalWorkspace:
             return {k: v["value"] for k, v in self._memory_pool.items()}
 
 class MetacognitiveMonitor:
-    """Surprise (NE) and focus (ACh) tracking."""
-    def __init__(self):
+    """Surprise (NE) and focus (ACh) tracking with EMA smoothing."""
+    def __init__(self, ema_alpha: float = 0.3):
         self.ne_surprise = 0.0
         self.ach_focus = 0.5
+        self.ema_alpha = ema_alpha
         self.state = "NORMAL"
 
     def update(self, prediction_error: float, task_demand: float):
-        self.ne_surprise = prediction_error
+        # Exponential Moving Average (EMA) for surprise to prevent jitter
+        self.ne_surprise = (self.ema_alpha * prediction_error) + ((1 - self.ema_alpha) * self.ne_surprise)
         self.ach_focus = task_demand
 
         if self.ne_surprise > 0.8:
